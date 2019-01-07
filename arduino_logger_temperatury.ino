@@ -2,30 +2,30 @@
 #include <SPI.h>
 #include <SD.h>
 #include <Wire.h>
-#include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
 #include "DHT.h"
+//#include <Time.h>
 
+#include "U8glib.h"
 
 #define dhtp 2
 #define dhtyp DHT22
 #define sdpin 10
-#define OLED_RESET 4
 
 File plikdane;
-
+static bool war1szegorazu=1;//waruenek do wykonania pomiaru w chwili 0;
 unsigned long zaptime1=0;
 unsigned long actime=0;
-unsigned long czas=60000;//60 sek odstepu
-//char nazwa[]="dane.txt";
+unsigned long czas=120000;//2 min odstepu
 
-
+//warun 1 zmienione na 1 bo nie wyswietla nic od razu po uruchodmieniu tylko po odstepie// tylko teraz moze wywietlac syf
+bool warun1=1;//warunk zmienia sie na 1 po 1szym zapisie i potem tak zostaje,poczebny zrby wyswietlacz nie wyswietlal czegos jak jeszcze nie bylo pomiaru iz eby odplil sie na 15 sekund po wykonaniu pomiaru
 float wilg=0,temp=0;//na to referencje beda przekazywac sie wartosci w funkcjach
 bool warunek=0;
+int opcja=0;
 int powtarzalnosc=1;
-int odcz0=0,odcz1=0,odcz2=0;
+int odcz0=0,odcz1=0,odcz2,odcz3=0;//odcz0 A0 termistor0,odcz1 A1 termistor1,odcz2 A2 fotorezystor,odcz3 A3 plus baterii
 DHT dht(dhtp,dhtyp);
-Adafruit_SSD1306 display(OLED_RESET);
+U8GLIB_SSD1306_128X64 u8g(U8G_I2C_OPT_NONE|U8G_I2C_OPT_DEV_0);  // I2C / TWI 
 
 //funkcja mierzenie dostaje referencje na parametry z funkcji odczyt 
 void zapis(int a);
@@ -33,55 +33,70 @@ void mierzenie(unsigned long odstep,float &wilgmierz,float &tempmierz,bool &waru
 void wyswietlanie(float &wilgodcz,float &tempodcz,bool &warun);
 void logger();
 void odczytywanie();
-//void oledshow(int &odcz0,int &odcz1,int &odcz2);
+//void draw(int opcja1,float temP,float wilG,int temP0,int temP1,int jasn);
+void draw();
+
+void aktualizacja();
 
 void setup() {
   // Open serial communications and wait for port to open:
   Serial.begin(9600);
 
-  dht.begin();
- // display.begin(SSD1306_SWITCHCAPVCC,0x3C);
-//  display.clearDisplay();
-  Serial.println("gotowy");
-  Serial.println("szukam karte");
-  
+  dht.begin();//zaczynamy transmisje z czyjnika dht
 
- 
-while(SD.begin(sdpin)==0){
+    
+
+   Serial.println("gotowy");
+  Serial.println("szukam karte");
+
+
+while(SD.begin(sdpin)==0){ //sprawdzamy komunikacje z karta SD
   
     Serial.println("nie wykryto karty");
-    delay (500);
+   // opcja=1;
+   
+  
+       delay (500);
+  // opcja=0;
     //nie zacznie programu az nie znajdzie karty
+    
 }
 
+
   Serial.println("karta wykryta, zaczynam");
- /*if(SD.exists(nazwa))
-  {//jesli istniej e poprzedni plik to przy uruchamianiu usuwa go
-    //zeby nie bylo problemu z osia czasu
-  SD.remove("dane.txt");
-  }*/
+  //opcja=2;
   
- bool istnienie=0;
+//opcja=0;
+  
+   bool istnienie=0;
  if(SD.exists("dane.txt")) istnienie=1;
  
   
 if(istnienie==1) {
    plikdane=SD.open("dane.txt",FILE_WRITE);
-  Serial.println("reset zasilania byl");
+ // Serial.println("reset zasilania byl");
   plikdane.print("PRZERWA");
   plikdane.println();
   plikdane.close();
 }
   
-  Serial.println("utworzono plik dane.csv");
 
 }
 
 void loop() {
   // make a string for assembling the data to log:
+ 
   mierzenie(czas,wilg,temp,warunek);
   wyswietlanie(wilg,temp,warunek);
- // oledshow();
+aktualizacja();
+if(warun1==1 || war1szegorazu==1)//zalozenie jest takie ze bedzie przez 15 sekund po wykonaniu zapisu sie ta petla wyswietlania robic
+{
+u8g.firstPage();  
+  do {
+    draw(temp,wilg,odcz0,odcz1,odcz2,odcz3);
+  } while( u8g.nextPage() );
+}
+war1szegorazu=0;
 //  Serial.println(wilgmierz);
  // Serial.println(tempmierz);
   
@@ -94,15 +109,15 @@ void mierzenie(unsigned long odstep,float &wilgmierz,float &tempmierz,bool &waru
   actime=millis();
  unsigned long differ=actime-zaptime1;
 
-  if(differ>=odstep)
+  if((differ>=odstep) || (war1szegorazu==1))
   {
-    Serial.println(differ);
+  //  Serial.println(differ);
 wilgmierz=dht.readHumidity();
 tempmierz=dht.readTemperature();
     if(isnan(tempmierz)||isnan(wilgmierz))
     {
-      Serial.println("cos nie tak poszlo i odczyt bledny");
-     // warun=0;
+     Serial.println("cos nie tak poszlo i odczyt bledny");
+      warun=0;
     }else{
        warun=1;
     zaptime1=millis();//czas od 
@@ -110,7 +125,7 @@ tempmierz=dht.readTemperature();
   }
 }
 
-
+//funkcja zapisujaca na SD oraz odczytujaca analogi
 void wyswietlanie(float &wilgodcz,float &tempodcz,bool &warunek1)
 {
  if(warunek1==1)
@@ -120,23 +135,25 @@ void wyswietlanie(float &wilgodcz,float &tempodcz,bool &warunek1)
     Serial.print(wilgodcz);
     Serial.print(" %\t");
     Serial.print("Temperature: "); 
-    Serial.print(tempodcz);
+   Serial.print(tempodcz);
     Serial.println(" *C");;
   warunek1 = !warunek1;
-  Serial.println(warunek1);
-  Serial.println(zaptime1);
-  odczytywanie(odcz0,odcz1,odcz2);
-  logger(wilgodcz,tempodcz,odcz0,odcz1,odcz2);
+ // Serial.println(warunek1);
+ // Serial.println(zaptime1);
+ //odczyt analogów
+  odczytywanie(odcz0,odcz1,odcz2,odcz3);
+  logger(wilgodcz,tempodcz,odcz0,odcz1,odcz2,odcz3);
+  //zmienia warunek na pozytywany, rozpoczyna aktualizacje wyswietlacza
+  //mozna funkcji draw dac te same wartosci jak do funkcji logger
+  warun1=1;
+ 
+  
   //odczytywanie();
  }
 }
 
-//trzeba stworzyc 2 funkcje
-//1sza przed calascia funkcji i sprawdza differ i jak ok to warun na 1 czy jest ok
-//za nia wszystkie funkcje co maja sie wykonywac co differ wewnatrz ich if(1) to dopiero sie wykonuja
-//na koncu 2ga funkcja ktora zmienia warunek na 0 jesli differ obliczony w pierwszej jest zgodny z odstepem
-//2ga sprawdzajaca dostaje differ w referencji ?
-void logger(float &wilgotnosc,float &temperatura,int &odczy0, int &odczy1,int &odczy2)
+
+void logger(float &wilgotnosc,float &temperatura,int &odczy0, int &odczy1,int &odczy2,int &odczy3)
 {
   plikdane=SD.open("dane.txt",FILE_WRITE);
   plikdane.print(zaptime1);
@@ -150,39 +167,88 @@ void logger(float &wilgotnosc,float &temperatura,int &odczy0, int &odczy1,int &o
   plikdane.print(odczy1);
    plikdane.print(";");
   plikdane.print(odczy2);
+  plikdane.print(";");
+  plikdane.print(odczy3);
    plikdane.println();
   plikdane.close();
-  Serial.println("zapisano czas i danex2!");
-  Serial.println(odczy0);
-  Serial.println(odczy1);
-  Serial.println(odczy2);
+ // Serial.println("zapisano czas i danex2!");
+ // Serial.println(odczy0);
+ // Serial.println(odczy1);
+ // Serial.println(odczy2);
 }
 
-void odczytywanie(int &odczyt0,int &odczyt1,int &odczyt2)
+void odczytywanie(int &odczyt0,int &odczyt1,int &odczyt2,int &odczyt3)
 {
    odczyt0=analogRead(A0);//termistor0
    odczyt1=analogRead(A1);//termistor1
    odczyt2=analogRead(A2);//fotorezystor
-  Serial.println(odczyt0);
-  Serial.println(odczyt1);
-  Serial.println(odczyt2);
-  //oledshow(odczyt0,odczyt1,odczyt2);
+   odczyt3=analogRead(A3);//poziom baterii 0d 0 d0 1023
+ // Serial.println(odczyt0);
+  //Serial.println(odczyt1);
+ // Serial.println(odczyt2);
+  
 }
 
-/*
-void oledshow(int &odcz0,int &odcz1,int &odcz2)
-{
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(WHITE);
-  display.setCursor(0,0);
-  display.println("odczyt0: ");
-  display.print(odcz0);
-  
-   display.println("odczyt1: ");
-  display.print(odcz1);
-   display.println("odczyt2: ");
-  display.print(odcz2);
-    display.display();
+//void draw(int opcja1,float temP,float wilG,int temP0,int temP1,int jasn) {
+void draw(float tempDHT,float wilgDHT,int tempan0,int tempan1,int swiatl,int battlev){
+//x y to pozycja lewego dolnego piksela pisanego tekstu
+u8g.setFont(u8g_font_6x12);
+u8g.setColorIndex(1);
+
+ int x=0,y=7,xd=64; // wpolowie zaczniemy wartosci wiec x bedzie 64 rowne
+ float volty=(5.0*battlev)/1024.0;//chce,my miec poziom bateri we woltach a nie w 0-1023
+
+u8g.drawStr( x, y, "tempDHT");
+//robimy konwersje floata na string
+char buf[5];
+dtostrf(tempDHT, 4,1,buf);
+u8g.drawStr( xd, y, buf);
+y+=10;
+u8g.drawStr( x, y, "wilgDHT");
+char buf0[5];
+dtostrf(wilgDHT, 4,1,buf0);
+u8g.drawStr( xd, y, buf0);
+y+=10;
+u8g.drawStr( x, y, "Temp0/1");
+char buf2[4];
+sprintf (buf2, "%d",tempan0);//konwersja dypu int na string
+char buf3[4];
+sprintf (buf3,"%d",tempan1);//konwersja dypu int na string
+u8g.drawStr( xd, y, buf2);
+u8g.drawStr(xd+22,y,buf3);
+y+=10;
+u8g.drawStr( x, y, "jasnosc");
+char buf4[4];
+sprintf (buf4, "%d", swiatl);//konwersja dypu int na string
+u8g.drawStr( xd, y, buf4);
+y+=10;
+u8g.drawStr( x, y, "bateria");
+char buf5[6];//konwersja poziomu baterii na string z floata
+dtostrf(volty, 5,2,buf5);
+u8g.drawStr( xd, y, buf5);
+y+=10;
+u8g.drawStr( x, y, "czas");
+char priodstep[11];
+sprintf(priodstep,"%lu",millis());//lu bo unsigned long
+u8g.drawStr( 44, y, priodstep);
+
 }
-*/
+
+void aktualizacja()
+{
+  actime=millis();
+   unsigned long differ=actime-zaptime1;
+   //przesuniueta opozniona wzgledem tamtej o 30 sekund
+if(warun1==1){
+  if((differ<=(15000)))//15 sekund na aktualizacje wyswietlacza
+  {
+          warun1=1;
+         
+    }else{
+       warun1=0;
+    
+    }
+  }
+}
+
+
