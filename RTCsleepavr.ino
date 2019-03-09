@@ -5,20 +5,27 @@
 #include "U8glib.h"
 #include <AM2320.h>
 
-AM2320 thsensor;
-DS3231 Clock;
-U8GLIB_SSD1306_128X64 u8g(U8G_I2C_OPT_NONE|U8G_I2C_OPT_DEV_0); // I2C / TWI 
-bool Century=false;
+#define analog_rain_pin A0
+AM2320 thsensor;//inicjalizacja obiektu sensora am2320
+DS3231 Clock;//inicjalizacjaa obiektu zeara
+U8GLIB_SSD1306_128X64 u8g(U8G_I2C_OPT_NONE|U8G_I2C_OPT_DEV_0); // I2C / TWI wyswietlacz oled i2c
+bool Century=false;//nie wiem czy to potrzebne
 bool h12;
 bool PM;
+bool not_raining=0;
 volatile boolean flag=false;
+
+
+const int rain_sense_pin =6;
 const int SW=2;
+
+int rain_density=0;//wartosc do analogowego odcztu deszczu imn mniejsza tym wiekszy
 float humi=0,temp=0;
 byte counter=0;
 char float_to_char(float &value);
 void clearOLED();
 void amsensor_readout(float &humid,float &tempe);
-void draw(byte daY,byte montH,byte yeaR,byte houR,byte minutE,byte seC,float &humi_1,float &temp_1);
+void draw(byte daY,byte montH,byte yeaR,byte houR,byte minutE,byte seC,float &humi_1,float &temp_1,bool not_raining_cpy,int &rain_density);
 void setFlag();
 void ArduGoSleep();
 
@@ -28,6 +35,8 @@ void setup() {
   // Start the serial interface
   Serial.begin(115200);
   pinMode(SW,INPUT_PULLUP);
+  pinMode(rain_sense_pin,INPUT);
+  
  // amsensor_Readout(humi,temp);
   //delay(2000);
   float testingvalue=26.54;
@@ -66,13 +75,14 @@ Serial.println(Clock.getHour(h12, PM));
   if(flag){
     
 amsensor_Readout(humi,temp);
-counter++;
-Serial.println(counter);
+not_raining=rain_checker(rain_density);//checking weather the mesured level of rain is greater than the defined one
+//at the same time getting preecise rain value to the global variable rain_density
+//not_raining=1 when no rain, 0 when it rains
     u8g.sleepOff();
     //amsensor_Readout(humi,temp);
   u8g.firstPage();  
    do {
-draw(0,0,0,Clock.getHour(h12, PM),Clock.getMinute(),Clock.getSecond(),humi,temp);
+draw(0,0,0,Clock.getHour(h12, PM),Clock.getMinute(),Clock.getSecond(),humi,temp,not_raining,rain_density);
 } while( u8g.nextPage() );
 //amsensor_Readout(humi,temp);
   delay(5000);
@@ -85,7 +95,7 @@ draw(0,0,0,Clock.getHour(h12, PM),Clock.getMinute(),Clock.getSecond(),humi,temp)
 }
 
 
-void draw(byte daY,byte montH,byte yeaR,byte houR,byte minutE,byte seC,float &humi_1,float &temp_1)
+void draw(byte daY,byte montH,byte yeaR,byte houR,byte minutE,byte seC,float &humi_1,float &temp_1,bool not_raining_cpy,int &rain_density)
 {
 //x y to pozycja lewego dolnego piksela pisanego tekstu
 u8g.setFont(u8g_font_6x12);
@@ -114,6 +124,13 @@ y+=10;
 char buf_t[6];//bo znak minus
 dtostrf(temp_1,6,2,buf_t);
 u8g.drawStr(0,y,"temp: "); u8g.drawStr(xd,y,buf_t);
+y+=10;
+u8g.drawStr(0,y,"no rain?: ");
+u8g.setPrintPos(xd,y); u8g.print(not_raining_cpy);
+y+=10;
+u8g.drawStr(0,y,"rain density: ");
+u8g.setPrintPos(xd+30,y); u8g.print(rain_density);//+30 to prevent both columns from meeting
+
 }
 
 void setFlag()
@@ -184,5 +201,12 @@ char float_to_char(float &value)
   char buf[6];
   dtostrf(value,6,2,buf);
   return buf[6];
+}
+
+bool rain_checker(int &rain_density_cpy)
+{
+rain_density_cpy=analogRead(analog_rain_pin);//analog rain ddensity measurment 
+//the greater the number the weaker the rain is becouse greater resistance and higher voltage drop 
+  return (digitalRead(rain_sense_pin));//returns 0 when not raining, 1 when it rains
 }
 
