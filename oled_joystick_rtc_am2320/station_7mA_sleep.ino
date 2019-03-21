@@ -1,4 +1,5 @@
 //eeprom function and many digital pins are still not used!
+//gnd from joystick and rtc are on the collector from npn common e transistor causing 1.5mA power saving base of transistor is joystick_vcc
 #include <avr/sleep.h>
 #include <DS3231.h>
 #include <Wire.h>
