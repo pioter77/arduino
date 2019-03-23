@@ -8,7 +8,9 @@
 #include <AM2320.h>
 #include <DHT.h>
 
-#define batt_vcc_sense_pin A6//battery level measurment pin
+const byte solar_panel_sense_pin=A7;
+const byte batt_vcc_sense_pin=A6;//battery level measurment pin
+#define sdpin 10//pin sd
 #define light_sensor_pin A1 //analog sensor pin for light sensor
  #define yaxis A2 //joystick yaxis pin[analog]
  #define xaxis A3//joystick xaxis pin[analog]
@@ -16,6 +18,7 @@
 #define DHTTYPE DHT11 // dht 11 ale czy t ojest ten z ujemnymi temp?
 #define analog_rain_pin A0 //precise analog rain sensor values from this pin
 AM2320 thsensor;//inicjalizacja obiektu sensora am2320
+File plikdane;
 DS3231 Clock;//inicjalizacjaa obiektu zeara
 U8GLIB_SSD1306_128X64 u8g(U8G_I2C_OPT_NONE|U8G_I2C_OPT_DEV_0); // I2C / TWI wyswietlacz oled i2c
 DHT dht(dhtpin,DHTTYPE);// dht sensor object inciialisation
@@ -48,8 +51,9 @@ int rain_density=0;//wartosc do analogowego odcztu deszczu imn mniejsza tym wiek
 float humi=0,temp=0;//to store the am sensor readouts (outside)
 float humi_dht=0,temp_dht=0;//tostore dht 11 readouts (inside)
 float batt_level=0;
+float solar_voltage=0;
 
-void battery_readout(uint16_t batt_in_series,float &batt_level);
+void battery_readout(byte sensor_pin_volt,uint16_t batt_in_series,float &batt_level);
 bool rain_checker(int &rain_density_cpy);
 void joystick_push_to_sleep();//checks wheather to on or off the oled screen
 void draw(void);//draw function mandatory for u8glib
@@ -57,7 +61,7 @@ byte position_check();//checks wheather the joystick is tilted or not
 byte screen_option();//to determine what picture to display
 void read_dht(float &humi_dht,float &temp_dht);//function to read from dht sensor
 void amsensor_Readout(float &humid,float &tempe);//function to read from am2320 senor
-void draw(byte daY,byte montH,byte yeaR,byte houR,byte minutE,byte seC,float &humi_1,float &temp_1,bool not_raining_cpy,int &rain_density,byte box_mov_dir,int light_density_cpy,float &humi_dht,float &temp_dht);
+void draw(byte daY,byte montH,byte yeaR,byte houR,byte minutE,byte seC,float &humi_1,float &temp_1,bool not_raining_cpy,int &rain_density,byte box_mov_dir,int light_density_cpy,float &humi_dht,float &temp_dht,float &solar_volatge_org);
 void setFlag();//function tht is runned when an innterupt happens
 void ArduGoSleep();//function that puts arduino to deep sleep arduino is being held in that function until next interrupt
 void read_dht(float &hum_dht,float &tempe_dht);//function to read values from dht 11 sensor
@@ -66,6 +70,7 @@ void setup() {
   // Start the I2C interface
   Wire.begin();
   dht.begin();//start dht sensor
+  SD.begin(sdpin)
   // Start the serial interface
  //Serial.begin(115200);
  pinMode(joystick_vcc,OUTPUT);
@@ -77,7 +82,18 @@ void setup() {
   //digitalWrite(clock_vcc,LOW);//off immediatelly, shoud be pulled high only during measurment
   pinMode(SW,INPUT_PULLUP);
   pinMode(rain_sense_pin,INPUT);
+    bool istnienie=0;
+    
+ if(SD.exists("dane.txt")) istnienie=1;
+ 
   
+if(istnienie==1) {
+   plikdane=SD.open("dane.txt",FILE_WRITE);
+ // Serial.println("reset zasilania byl");
+  plikdane.print("PRZERWA");
+  plikdane.println();
+  plikdane.close();
+}
  // amsensor_Readout(humi,temp);
   //delay(2000);
  // float testingvalue=26.54;
@@ -119,7 +135,8 @@ Serial.println(Clock.getHour(h12, PM));
       
     if(first_run_condition==true){
      digitalWrite(joystick_vcc,HIGH);
-    battery_readout(batt_in_series_for_power,batt_level);//checks battery level
+    battery_readout(batt_vcc_sense_pin,batt_in_series_for_power,batt_level);//checks battery level
+    battery_readout(solar_panel_sense_pin,3,solar_voltage);//checks solar voltage level
     amsensor_Readout(humi,temp);//we are reading the values from am2320 sensor
     read_dht(humi_dht,temp_dht);//reading inside temperature values
     not_raining=rain_checker(rain_density);//checking weather the mesured level of rain is greater than the defined one
@@ -137,7 +154,7 @@ Serial.println(Clock.getHour(h12, PM));
     //amsensor_Readout(humi,temp);
   u8g.firstPage();  
    do {
-draw(0,0,0,Clock.getHour(h12, PM),Clock.getMinute(),Clock.getSecond(),humi,temp,not_raining,rain_density,position_check(),light_density,humi_dht,temp_dht,batt_level);
+draw(0,0,0,Clock.getHour(h12, PM),Clock.getMinute(),Clock.getSecond(),humi,temp,not_raining,rain_density,position_check(),light_density,humi_dht,temp_dht,batt_level,solar_voltage);
 //draw(0,0,0,0,0,0,humi,temp,not_raining,rain_density,position_check());
 } while( u8g.nextPage() );//end of the picture loop
 //amsensor_Readout(humi,temp);
@@ -163,7 +180,7 @@ draw(0,0,0,Clock.getHour(h12, PM),Clock.getMinute(),Clock.getSecond(),humi,temp,
 
 //this function needs modifying still, to make it more readable and to make its oled output look more representative
 void draw(byte daY,byte montH,byte yeaR,byte houR,byte minutE,byte seC,float &humi_1,float &temp_1,bool not_raining_cpy,int &rain_density,byte box_mov_dir,int light_density_cpy,
-float &humi_dht,float &temp_dht,float batt_level_cpy)
+float &humi_dht,float &temp_dht,float batt_level_cpy,float &solar_voltage_org)
 {
 //x y to pozycja lewego dolnego piksela pisanego tekstu
 u8g.setFont(u8g_font_6x12);
@@ -222,6 +239,10 @@ byte box_length=16;//pixels
     char buf_batt[3];
     dtostrf(batt_level_cpy, 4,2,buf_batt);//zm do konwersji,ilosc miejsc calosci ze znakiem,ile po przecinku i bufor string do zapisu
       u8g.drawStr(0,y+10,"batt_level: "); u8g.drawStr(xd,y+10,buf_batt);
+
+      char buf_solar[3];
+    dtostrf(solar_voltage_org, 4,2,buf_solar);//zm do konwersji,ilosc miejsc calosci ze znakiem,ile po przecinku i bufor string do zapisu
+      u8g.drawStr(0,y+20,"solar_lev: "); u8g.drawStr(xd,y+20,buf_solar);
       
     break;
 
@@ -318,12 +339,12 @@ void read_dht(float &humi_dht,float &temp_dht)
  // }
 }
 
-void battery_readout(uint16_t batt_in_series,float &batt_level)
+void battery_readout(byte sensor_pin_volt,uint16_t batt_in_series,float &batt_level)
 {
   //it will only work until battery volatage is single cell one
 //with 2s pack you will get 8.2v and that wil kill arduino
 //needs then a volatage divider
-int readout_value_batt=analogRead(batt_vcc_sense_pin);
+int readout_value_batt=analogRead(sensor_pin_volt);
 //Serial.println(readout_value_batt);
 
 switch(batt_in_series){
@@ -338,8 +359,14 @@ switch(batt_in_series){
         //left series resistor pin to battery vcc 9V! right to gnd middle A6
         //note that powering it with 2s and mesuring battery level using this technique will increase power consumption 
         //becouse 2x10k volltage drop of 8.4v will consume additional 0.42mA of current
-        batt_level=(float)readout_value_batt*5.0*2.0/1023.0;
+        batt_level=(float)readout_value_batt*5.0*2.0/1024.0;
       break;
+
+    case 3://if we want to measure 6v solar panel similiar setup for 2s cell
+    
+            batt_level=(float)readout_value_batt*5.0*2.0/1090.0;//compensation for making true readout
+      break;
+
 }
 }
 
